@@ -5,7 +5,7 @@ import sys
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from naegeulmoa import server as S
+from writemoa import server as S
 from samples import AI_DRAFT, NOTICE
 
 
@@ -40,7 +40,7 @@ def test_flow(examples, home):
     assert '똑같은 부분' in same
     assert '안내서 파일:' in S.analyze_my_style()
     from pathlib import Path
-    assert S._where(Path.home() / '.naegeulmoa' / '기본' / 'guide.md') == '~/.naegeulmoa/기본/guide.md'
+    assert S._where(Path.home() / '.writemoa' / '기본' / 'guide.md') == '~/.writemoa/기본/guide.md'
 
 
 def test_stale_guide_removed(examples, home):
@@ -69,8 +69,8 @@ def test_stdio_round_trip(tmp_path):
     from mcp.client.stdio import stdio_client
 
     async def run():
-        env = dict(os.environ, NAEGEULMOA_HOME=str(tmp_path / 'h'))
-        p = StdioServerParameters(command=sys.executable, args=['-m', 'naegeulmoa.server'], env=env)
+        env = dict(os.environ, WRITEMOA_HOME=str(tmp_path / 'h'))
+        p = StdioServerParameters(command=sys.executable, args=['-m', 'writemoa.server'], env=env)
         async with stdio_client(p) as (r, w):
             async with ClientSession(r, w) as s:
                 await s.initialize()

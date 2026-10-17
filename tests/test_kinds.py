@@ -1,6 +1,6 @@
 import pytest
 
-from naegeulmoa import kinds
+from writemoa import kinds
 from samples import EMAIL, NOTICE, PAPER, REVIEW, SNS
 
 

@@ -1,4 +1,4 @@
-"""내 글 보관 — 내 컴퓨터(~/.naegeulmoa 또는 NAEGEULMOA_HOME)에 파일로 저장한다. 내글모아가 어디로 보내지는 않는다.
+"""내 글 보관 — 내 컴퓨터(~/.writemoa 또는 WRITEMOA_HOME)에 파일로 저장한다. 내글모아가 어디로 보내지는 않는다.
 (다만 글을 쓰고 점검할 때 그 내용은 지금 쓰는 AI 서비스로 전달된다 — AI 가 읽어야 쓸 수 있으므로.)
 
 폴더 모양:
@@ -28,7 +28,7 @@ _RESERVED = {'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10)), *(f
 
 
 def home() -> Path:
-    return Path(os.environ.get('NAEGEULMOA_HOME', Path.home() / '.naegeulmoa'))
+    return Path(os.environ.get('WRITEMOA_HOME', Path.home() / '.writemoa'))
 
 
 def safe_name(name: str) -> str:

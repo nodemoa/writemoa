@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from naegeulmoa import naver
+from writemoa import naver
 
 
 def test_blog_id():

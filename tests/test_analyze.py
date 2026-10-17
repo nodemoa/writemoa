@@ -1,6 +1,6 @@
 import time
 
-from naegeulmoa import analyze as A
+from writemoa import analyze as A
 
 LEVELS = [
     ('같이 가요.', '해요체'), ('정말 맛있어요😊', '해요체'), ('좋았어요(웃음)', '해요체'), ('진짜 좋아요 :)', '해요체'),
@@ -115,7 +115,7 @@ def test_round2_counts():
 def test_digits_fast():
     t0 = time.monotonic()
     A.measure(['1' * 20000 + '원', '3' * 20000 + '~5'])
-    from naegeulmoa import kinds
+    from writemoa import kinds
     kinds.signals('1' * 20000 + '월 3일까지')
     kinds.norm_issues(kinds.BY_ID['blog-review'], '1' * 20000)
     assert time.monotonic() - t0 < 3

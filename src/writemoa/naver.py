@@ -14,7 +14,7 @@ import urllib.request
 
 from . import __version__
 
-UA = f'naegeulmoa/{__version__} (+https://nodemoa.com)'
+UA = f'writemoa/{__version__} (+https://nodemoa.com)'
 MAX_BYTES = 3_000_000   # 한 번 받는 응답 상한
 TIMEOUT = 15            # 요청 하나의 제한 시간(초)
 TOTAL_SECONDS = 120     # 가져오기 전체 제한 시간(초)

@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from naegeulmoa import store
+from writemoa import store
 
 BODY = '오늘은 노트북 배터리 이야기를 해 보려고 합니다. 충전기를 늘 꽂아 두면 배터리가 조금씩 지칩니다. ' * 3
 
@@ -85,7 +85,7 @@ def test_nfd_style_name():
 
 
 def test_double_cr():
-    from naegeulmoa import analyze
+    from writemoa import analyze
     assert analyze.clean('가\r\r\n나\r\n다\r라') == '가\n나\n다\n라'
 
 

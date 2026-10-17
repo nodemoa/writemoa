@@ -1,5 +1,5 @@
 [project]
-name = "naegeulmoa"
+name = "writemoa"
 dynamic = ["version"]
 description = "내글모아 — 내가 쓴 글을 분석해, AI가 블로그나 글을 내 문체로 쓰게 돕는 무료 MCP 서버. 만든 곳: 노드모아(nodemoa.com)"
 readme = "README.md"
@@ -24,20 +24,20 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://nodemoa.com"
-Source = "https://github.com/nodemoa/naegeulmoa"
+Source = "https://github.com/nodemoa/writemoa"
 
 [project.scripts]
-naegeulmoa = "naegeulmoa.server:main"
+writemoa = "writemoa.server:main"
 
 [build-system]
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/naegeulmoa/__init__.py"
+path = "src/writemoa/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/naegeulmoa"]
+packages = ["src/writemoa"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "examples", "README.md", "LICENSE", "pyproject.toml"]
