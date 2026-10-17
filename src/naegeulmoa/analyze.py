@@ -123,22 +123,26 @@ def copied_spans(draft: str, samples: list[str], n: int = 14, min_len: int = 22)
     return hits
 
 
-def compare(draft: dict, mine: dict) -> list[str]:
-    """초안 수치를 내 문체와 견주어, 고칠 점을 쉬운 말로."""
+def compare(draft: dict, mine: dict, same_kind: bool = True) -> list[str]:
+    """초안 수치를 내 문체와 견주어, 고칠 점을 쉬운 말로.
+
+    same_kind=False(그 종류 내 글이 없어 다른 종류 글과 견줄 때): 길이 · 줄바꿈 · 어미 · 「더 쓰세요」 는
+    종류마다 다른 것이라 빼고, 내가 안 쓰는 버릇(문장부호 · 웃음 · AI 투 말)만 짚는다.
+    """
     tips: list[str] = []
 
     def near(a: float, b: float, rel: float, absol: float) -> bool:
         return abs(a - b) <= max(absol, abs(b) * rel)
 
-    for key, unit, rel, ab in [('문장 길이 평균', '자', 0.2, 5), ('줄 길이 평균', '자', 0.2, 3), ('글 길이 평균', '자', 0.3, 150)]:
+    for key, unit, rel, ab in ([('문장 길이 평균', '자', 0.2, 5), ('줄 길이 평균', '자', 0.2, 3), ('글 길이 평균', '자', 0.3, 150)] if same_kind else []):
         a, b = draft[key], mine[key]
         if not near(a, b, rel, ab):
             tips.append(f'{key}: 초안 {a}{unit} · 내 글 {b}{unit} → ' + ('더 길게' if a < b else '더 짧게') + ' 맞추세요.')
-    if abs(draft['짧은 줄(20자 이하) 비율'] - mine['짧은 줄(20자 이하) 비율']) > 0.2:
+    if same_kind and abs(draft['짧은 줄(20자 이하) 비율'] - mine['짧은 줄(20자 이하) 비율']) > 0.2:
         tips.append(f"줄바꿈: 짧은 줄 비율 초안 {int(draft['짧은 줄(20자 이하) 비율']*100)}% · 내 글 {int(mine['짧은 줄(20자 이하) 비율']*100)}% → "
                     + ('한 문장을 여러 줄로 끊어 쓰세요.' if draft['짧은 줄(20자 이하) 비율'] < mine['짧은 줄(20자 이하) 비율'] else '줄을 덜 끊고 이어 쓰세요.'))
     de, me = draft['어미 비율'], mine['어미 비율']
-    for k in sorted(set(de) | set(me), key=lambda k: -me.get(k, 0)):
+    for k in (sorted(set(de) | set(me), key=lambda k: -me.get(k, 0)) if same_kind else []):
         a, b = de.get(k, 0), me.get(k, 0)
         if b >= 0.08 and a < b * 0.4:
             tips.append(f'어미 「{k}」: 내 글은 {int(b*100)}%인데 초안은 {int(a*100)}% → 더 쓰세요.')
@@ -150,13 +154,13 @@ def compare(draft: dict, mine: dict) -> list[str]:
         b = mine['1천 자당'].get(k, 0)
         if b < 0.3 and a >= 1.0:
             tips.append(f'{k}: 내 글에서는 거의 안 쓰는데 초안에 있음(1천 자당 {a}) → 빼세요.')
-        elif b >= 1.0 and a < b * 0.35:
+        elif same_kind and b >= 1.0 and a < b * 0.35:
             tips.append(f'{k}: 내 글은 1천 자당 {b}, 초안은 {a} → 조금 더 쓰세요.')
         elif b >= 1.0 and a > b * 2.5:
             tips.append(f'{k}: 초안 1천 자당 {a} · 내 글 {b} → 줄이세요.')
     used = set(draft['자주 쓰는 부사 · 이음말'])
     favorite = [w for w, c in mine['자주 쓰는 부사 · 이음말'].items() if c >= 2 and w not in used][:5]
-    if favorite:
+    if favorite and same_kind:
         tips.append('내가 자주 쓰는 말이 초안에 없음: ' + ', '.join(favorite) + ' → 자연스러운 자리에 넣어 보세요.')
     for p, c in draft['AI 티 나는 말'].items():
         if mine['AI 티 나는 말'].get(p, 0) * (draft['글자 수(공백 뺌)'] / max(1, mine['글자 수(공백 뺌)'])) < c * 0.5:

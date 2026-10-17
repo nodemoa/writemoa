@@ -1,9 +1,10 @@
 """내 글 보관 — 모든 것은 내 컴퓨터(~/.naegeulmoa 또는 NAEGEULMOA_HOME)에만 둔다. 어디로도 보내지 않는다.
 
 폴더 모양:
-  <집>/<문체 이름>/samples/0001.txt …   내가 쓴 글(한 편 = 파일 하나, 첫 줄 「# 제목」)
-  <집>/<문체 이름>/profile.json         분석 수치
-  <집>/<문체 이름>/guide.md             AI 에게 주는 문체 안내서
+  <집>/<문체 이름>/samples/0001.txt …   내가 쓴 글(한 편 = 파일 하나, 첫 줄 「# 제목」, 다음 줄 「@종류: blog-info」)
+  <집>/<문체 이름>/profile.json         분석 수치(전체 · 종류별)
+  <집>/<문체 이름>/guide.md             AI 에게 주는 문체 안내서(전체)
+  <집>/<문체 이름>/guide-<종류>.md      종류별 안내서(그 종류 글이 2편 이상일 때)
 """
 from __future__ import annotations
 
@@ -32,34 +33,52 @@ def profile_dir(profile: str = DEFAULT) -> Path:
     return d
 
 
-def add_sample(text: str, title: str = '', profile: str = DEFAULT) -> str:
+def _write(path: Path, title: str, kind: str, body: str) -> None:
+    head = (f'# {title.strip()}\n' if title.strip() else '') + (f'@종류: {kind}\n' if kind else '')
+    path.write_text(head + body.strip() + '\n', encoding='utf-8')
+
+
+def add_sample(text: str, title: str = '', profile: str = DEFAULT, kind: str = '') -> str:
     text = text.strip()
     if len(re.sub(r'\s', '', text)) < 100:
         raise ValueError('글이 너무 짧습니다. 100자 이상인 글을 넣어 주세요(문체를 읽으려면 문장이 여러 개 있어야 합니다).')
     d = profile_dir(profile) / 'samples'
     nums = [int(p.stem) for p in d.glob('*.txt') if p.stem.isdigit()]
     sid = f'{(max(nums) + 1) if nums else 1:04d}'
-    head = f'# {title.strip()}\n' if title.strip() else ''
-    (d / f'{sid}.txt').write_text(head + text + '\n', encoding='utf-8')
+    _write(d / f'{sid}.txt', title, kind, text)
     return sid
 
 
-def read_sample(path: Path) -> tuple[str, str]:
+def read_sample(path: Path) -> tuple[str, str, str]:
+    """(제목, 종류, 본문)."""
     raw = path.read_text(encoding='utf-8')
+    title = kind = ''
     if raw.startswith('# '):
-        title, _, body = raw.partition('\n')
-        return title[2:].strip(), body.strip()
-    return '', raw.strip()
+        first, _, raw = raw.partition('\n')
+        title = first[2:].strip()
+    if raw.startswith('@종류:'):
+        first, _, raw = raw.partition('\n')
+        kind = first.split(':', 1)[1].strip()
+    return title, kind, raw.strip()
 
 
-def samples(profile: str = DEFAULT) -> list[tuple[str, str, str]]:
-    """(번호, 제목, 본문) 목록."""
+def samples(profile: str = DEFAULT) -> list[tuple[str, str, str, str]]:
+    """(번호, 제목, 종류, 본문) 목록."""
     d = profile_dir(profile) / 'samples'
     out = []
     for p in sorted(d.glob('*.txt')):
-        title, body = read_sample(p)
-        out.append((p.stem, title, body))
+        title, kind, body = read_sample(p)
+        out.append((p.stem, title, kind, body))
     return out
+
+
+def set_kind(sid: str, kind: str, profile: str = DEFAULT) -> bool:
+    p = profile_dir(profile) / 'samples' / f'{sid}.txt'
+    if not p.exists():
+        return False
+    title, _, body = read_sample(p)
+    _write(p, title, kind, body)
+    return True
 
 
 def remove_sample(sid: str, profile: str = DEFAULT) -> bool:
@@ -75,16 +94,22 @@ def profiles() -> list[str]:
     return sorted(p.name for p in h.iterdir() if p.is_dir()) if h.exists() else []
 
 
-def save_profile(data: dict, guide: str, profile: str = DEFAULT) -> Path:
+def save_profile(data: dict, guides: dict[str, str], profile: str = DEFAULT) -> Path:
+    """guides: {'': 전체 안내서, '<종류>': 종류별 안내서}."""
     d = profile_dir(profile)
+    for old in d.glob('guide-*.md'):
+        old.unlink()
     (d / 'profile.json').write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
-    (d / 'guide.md').write_text(guide, encoding='utf-8')
+    for kind, text in guides.items():
+        (d / (f'guide-{kind}.md' if kind else 'guide.md')).write_text(text, encoding='utf-8')
     return d / 'guide.md'
 
 
-def load_profile(profile: str = DEFAULT) -> tuple[dict | None, str | None]:
-    d = profile_dir(profile)
-    pj, gm = d / 'profile.json', d / 'guide.md'
-    if not pj.exists():
-        return None, None
-    return json.loads(pj.read_text(encoding='utf-8')), gm.read_text(encoding='utf-8') if gm.exists() else None
+def load_profile(profile: str = DEFAULT) -> dict | None:
+    pj = profile_dir(profile) / 'profile.json'
+    return json.loads(pj.read_text(encoding='utf-8')) if pj.exists() else None
+
+
+def load_guide(profile: str = DEFAULT, kind: str = '') -> str | None:
+    p = profile_dir(profile) / (f'guide-{kind}.md' if kind else 'guide.md')
+    return p.read_text(encoding='utf-8') if p.exists() else None

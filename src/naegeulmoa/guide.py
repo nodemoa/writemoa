@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 
-from . import analyze
+from . import analyze, kinds
 
 POLITE_YO = ('~잖아요', '~거든요', '~네요', '~는데요', '~고요', '~죠', '~예요/이에요', '~해요/어요/아요', '~세요', '~까요', '~요(기타)')
 FOOTER = '\n---\n이 안내서는 **내글모아**로 만들었습니다 — 노드모아(https://nodemoa.com)가 만든 무료 도구.\n'
@@ -24,21 +24,30 @@ def excerpt(body: str, n: int = 320) -> str:
     return cut + ('…' if len(body) > n else '')
 
 
-def build(profile_name: str, items: list[tuple[str, str, str]], m: dict) -> str:
+def norms(kind: 'kinds.Kind') -> list[str]:
+    """그 종류 글의 일반 규범 — 내 버릇과 부딪히면 규범을 먼저(예: 논문에 웃음 표시는 내 버릇이라도 빼기)."""
+    out = [f'## 「{kind.name}」 쓸 때의 기본', *[f'- {n}' for n in kind.norms]]
+    out += [f'- 꼭 넣을 것: {what}' for _, what in kind.must]
+    return out
+
+
+def build(profile_name: str, items: list[tuple[str, str, str, str]], m: dict,
+          kind: 'kinds.Kind | None' = None, counts: dict | None = None) -> str:
     e = m['어미 비율']
     top_end = ', '.join(f'「{k}」 {int(v*100)}%' for k, v in list(e.items())[:6])
     p = m['1천 자당']
     habits = [f'{k} {v}' for k, v in p.items() if v >= 0.5 and k not in ('숫자',)]
     rare = [k for k, v in p.items() if v < 0.3 and k not in ('숫자', '영어 낱말')]
-    titles = [t for _, t, _ in items if t][:6]
-    first_lines = [b.split('\n', 1)[0][:50] for _, _, b in items][:6]
-    last_lines = [[x for x in b.split('\n') if x.strip()][-1][:50] for _, _, b in items if b.strip()][:6]
+    titles = [t for _, t, _, _ in items if t][:6]
+    first_lines = [b.split('\n', 1)[0][:50] for _, _, _, b in items][:6]
+    last_lines = [[x for x in b.split('\n') if x.strip()][-1][:50] for _, _, _, b in items if b.strip()][:6]
     avoid = [w for w in analyze.AI_TELLS if w not in m['AI 티 나는 말']]
     chosen = random.Random(7).sample(items, min(3, len(items)))
+    head = f'# 내 문체 안내서 — {profile_name}' + (f' · {kind.name}' if kind else ' · 전체')
     lines = [
-        f'# 내 문체 안내서 — {profile_name}',
+        head,
         '',
-        f'글 {m["글 수"]}편({m["글자 수(공백 뺌)"]:,}자)에서 뽑았습니다. 글을 쓸 때 아래를 지키고, 끝나면 `check_draft` 로 견주어 고치세요.',
+        f'{"「" + kind.name + "」 " if kind else ""}글 {m["글 수"]}편({m["글자 수(공백 뺌)"]:,}자)에서 뽑았습니다. 글을 쓸 때 아래를 지키고, 끝나면 `check_draft` 로 견주어 고치세요.',
         '',
         '## 말투',
         f'- 주로: {tone(e)}',
@@ -60,6 +69,11 @@ def build(profile_name: str, items: list[tuple[str, str, str]], m: dict) -> str:
         lines += ['', '## 제목 예', *[f'- {t}' for t in titles]]
     lines += ['', '## 글을 여는 첫 줄 예', *[f'- {t}' for t in first_lines]]
     lines += ['', '## 글을 맺는 끝 줄 예', *[f'- {t}' for t in last_lines]]
+    if kind:
+        lines += ['', *norms(kind)]
+    elif counts:
+        lines += ['', '## 종류별로 넣은 글', *[f'- {kinds.BY_ID[k].name if k in kinds.BY_ID else k}: {n}편' for k, n in counts.items()],
+                  '- 블로그 · 공지처럼 종류가 정해진 글은 get_my_style_guide(kind=…) 로 그 종류 안내서를 읽으세요(종류마다 말투가 다릅니다).']
     lines += [
         '',
         '## 쓸 때 지킬 것',
@@ -71,6 +85,6 @@ def build(profile_name: str, items: list[tuple[str, str, str]], m: dict) -> str:
         '',
         '## 예문(앞부분)',
     ]
-    for sid, t, b in chosen:
+    for sid, t, _, b in chosen:
         lines += ['', f'### {t or "글 " + sid}', '', '```', excerpt(b), '```']
     return '\n'.join(lines) + '\n' + FOOTER
