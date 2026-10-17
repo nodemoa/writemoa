@@ -1,13 +1,26 @@
 [project]
 name = "naegeulmoa"
-version = "0.1.0"
-description = "내글모아 — 내가 쓴 글을 분석해, AI가 블로그나 글을 내 문체 그대로 쓰게 해 주는 무료 MCP 서버. 만든 곳: 노드모아(nodemoa.com)"
+dynamic = ["version"]
+description = "내글모아 — 내가 쓴 글을 분석해, AI가 블로그나 글을 내 문체로 쓰게 돕는 무료 MCP 서버. 만든 곳: 노드모아(nodemoa.com)"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "노드모아 (Nodemoa)", email = "support@nodemoa.com" }]
 requires-python = ">=3.10"
 dependencies = ["mcp>=2.0,<3"]
-keywords = ["mcp", "korean", "writing-style", "blog", "naver", "문체", "블로그"]
+keywords = ["mcp", "korean", "writing-style", "blog", "naver", "문체", "블로그", "글쓰기"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: Korean",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Linguistic",
+]
 
 [project.urls]
 Homepage = "https://nodemoa.com"
@@ -17,8 +30,17 @@ Source = "https://github.com/nodemoa/naegeulmoa"
 naegeulmoa = "naegeulmoa.server:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/naegeulmoa/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/naegeulmoa"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "examples", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,61 +1,98 @@
-"""내 글 보관 — 모든 것은 내 컴퓨터(~/.naegeulmoa 또는 NAEGEULMOA_HOME)에만 둔다. 어디로도 보내지 않는다.
+"""내 글 보관 — 내 컴퓨터(~/.naegeulmoa 또는 NAEGEULMOA_HOME)에 파일로 저장한다. 내글모아가 어디로 보내지는 않는다.
+(다만 글을 쓰고 점검할 때 그 내용은 지금 쓰는 AI 서비스로 전달된다 — AI 가 읽어야 쓸 수 있으므로.)
 
 폴더 모양:
-  <집>/<문체 이름>/samples/0001.txt …   내가 쓴 글(한 편 = 파일 하나, 첫 줄 「# 제목」, 다음 줄 「@종류: blog-info」)
+  <집>/<문체 이름>/samples/0001.txt …   내가 쓴 글(한 편 = 파일 하나, 첫 줄 「# 제목」, 둘째 줄 「@종류: blog-info」, 그다음 본문)
   <집>/<문체 이름>/profile.json         분석 수치(전체 · 종류별)
   <집>/<문체 이름>/guide.md             AI 에게 주는 문체 안내서(전체)
   <집>/<문체 이름>/guide-<종류>.md      종류별 안내서(그 종류 글이 2편 이상일 때)
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 
+from . import analyze
+
 DEFAULT = '기본'
+_SID = re.compile(r'\d{1,6}')
+_FILE = re.compile(r'\d{4,6}\.txt')
+_RESERVED = {'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10)), *(f'lpt{i}' for i in range(1, 10))}
 
 
 def home() -> Path:
     return Path(os.environ.get('NAEGEULMOA_HOME', Path.home() / '.naegeulmoa'))
 
 
-def _safe(name: str) -> str:
-    name = (name or DEFAULT).strip()
-    if not re.fullmatch(r'[0-9A-Za-z가-힣 _\-]{1,40}', name):
-        raise ValueError('문체 이름은 한글 · 영문 · 숫자 · 띄어쓰기 · _ - 로 40자 안에서 지어 주세요.')
+def safe_name(name: str) -> str:
+    name = unicodedata.normalize('NFC', name or DEFAULT).strip()
+    if not re.fullmatch(r'[0-9A-Za-z가-힣 _\-]{1,40}', name) or name.lower() in _RESERVED:
+        raise ValueError('문체 이름은 한글 · 영문 · 숫자 · 띄어쓰기 · _ - 로 40자 안에서 지어 주세요(보통은 비워 두면 「기본」).')
     return name
 
 
-def profile_dir(profile: str = DEFAULT) -> Path:
-    d = home() / _safe(profile)
-    (d / 'samples').mkdir(parents=True, exist_ok=True)
+def safe_sid(sid: str | int) -> str:
+    """글 번호 — 숫자만 받는다(「../x」 같은 경로로 다른 파일을 건드리지 못하게)."""
+    s = str(sid).strip()
+    if not _SID.fullmatch(s):
+        raise ValueError(f'글 번호는 숫자입니다(받은 값: {s[:20]}). list_my_writings 로 번호를 확인해 주세요.')
+    return s.zfill(4)
+
+
+def profile_dir(profile: str = DEFAULT, create: bool = True) -> Path:
+    d = home() / safe_name(profile)
+    if create:
+        (d / 'samples').mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _write(path: Path, title: str, kind: str, body: str) -> None:
-    head = (f'# {title.strip()}\n' if title.strip() else '') + (f'@종류: {kind}\n' if kind else '')
-    path.write_text(head + body.strip() + '\n', encoding='utf-8')
+def _one_line(s: str) -> str:
+    return re.sub(r'\s+', ' ', analyze.clean(s or '')).strip()[:200]
+
+
+def _write(path: Path, title: str, kind: str, body: str, mode: str = 'w') -> None:
+    # 머리 두 줄은 늘 쓴다(제목이 비어도). 본문이 「# 」 이나 「@종류:」 로 시작해도 머리로 읽히지 않게.
+    head = f'# {_one_line(title)}\n@종류: {_one_line(kind)}\n'
+    with open(path, mode, encoding='utf-8', newline='\n') as f:
+        f.write(head + body.strip() + '\n')
+
+
+def fingerprint(text: str) -> str:
+    return hashlib.sha1(re.sub(r'\s+', '', analyze.clean(text)).encode()).hexdigest()[:16]
 
 
 def add_sample(text: str, title: str = '', profile: str = DEFAULT, kind: str = '') -> str:
-    text = text.strip()
+    text = analyze.clean(text).strip()
     if len(re.sub(r'\s', '', text)) < 100:
         raise ValueError('글이 너무 짧습니다. 100자 이상인 글을 넣어 주세요(문체를 읽으려면 문장이 여러 개 있어야 합니다).')
     d = profile_dir(profile) / 'samples'
-    nums = [int(p.stem) for p in d.glob('*.txt') if p.stem.isdigit()]
-    sid = f'{(max(nums) + 1) if nums else 1:04d}'
-    _write(d / f'{sid}.txt', title, kind, text)
-    return sid
+    fp = fingerprint(text)
+    for sid, _, _, body in samples(profile):
+        if fingerprint(body) == fp:
+            raise ValueError(f'같은 글이 이미 있습니다(글 {sid}).')
+    nums = [int(p.stem) for p in d.iterdir() if _FILE.fullmatch(p.name)]
+    n = (max(nums) + 1) if nums else 1
+    for _ in range(1000):  # 두 요청이 같은 번호를 잡아도 덮어쓰지 않게 — 새 파일로만 연다
+        sid = f'{n:04d}'
+        try:
+            _write(d / f'{sid}.txt', title, kind, text, mode='x')
+            return sid
+        except FileExistsError:
+            n += 1
+    raise ValueError('글 번호를 잡지 못했습니다. 다시 시도해 주세요.')
 
 
 def read_sample(path: Path) -> tuple[str, str, str]:
-    """(제목, 종류, 본문)."""
-    raw = path.read_text(encoding='utf-8')
+    """(제목, 종류, 본문). 우리 형식이 아닌 글자(cp949 등)가 섞여 있어도 멈추지 않는다."""
+    raw = analyze.clean(path.read_text(encoding='utf-8', errors='replace'))
     title = kind = ''
-    if raw.startswith('# '):
+    if raw.startswith('# ') or raw.startswith('#\n'):
         first, _, raw = raw.partition('\n')
-        title = first[2:].strip()
+        title = first[1:].strip()
     if raw.startswith('@종류:'):
         first, _, raw = raw.partition('\n')
         kind = first.split(':', 1)[1].strip()
@@ -63,27 +100,39 @@ def read_sample(path: Path) -> tuple[str, str, str]:
 
 
 def samples(profile: str = DEFAULT) -> list[tuple[str, str, str, str]]:
-    """(번호, 제목, 종류, 본문) 목록."""
-    d = profile_dir(profile) / 'samples'
+    """(번호, 제목, 종류, 본문) 목록. samples 폴더의 「0001.txt」 꼴 파일만 본다."""
+    d = profile_dir(profile, create=False) / 'samples'
+    if not d.is_dir():
+        return []
     out = []
-    for p in sorted(d.glob('*.txt')):
-        title, kind, body = read_sample(p)
-        out.append((p.stem, title, kind, body))
+    for p in sorted(d.iterdir()):
+        if _FILE.fullmatch(p.name) and p.is_file():
+            title, kind, body = read_sample(p)
+            out.append((p.stem, title, kind, body))
     return out
 
 
-def set_kind(sid: str, kind: str, profile: str = DEFAULT) -> bool:
-    p = profile_dir(profile) / 'samples' / f'{sid}.txt'
-    if not p.exists():
+def _sample_path(sid: str | int, profile: str) -> Path:
+    return profile_dir(profile, create=False) / 'samples' / f'{safe_sid(sid)}.txt'
+
+
+def get_sample(sid: str | int, profile: str = DEFAULT) -> tuple[str, str, str] | None:
+    p = _sample_path(sid, profile)
+    return read_sample(p) if p.is_file() else None
+
+
+def set_kind(sid: str | int, kind: str, profile: str = DEFAULT) -> bool:
+    p = _sample_path(sid, profile)
+    if not p.is_file():
         return False
     title, _, body = read_sample(p)
     _write(p, title, kind, body)
     return True
 
 
-def remove_sample(sid: str, profile: str = DEFAULT) -> bool:
-    p = profile_dir(profile) / 'samples' / f'{sid}.txt'
-    if p.exists():
+def remove_sample(sid: str | int, profile: str = DEFAULT) -> bool:
+    p = _sample_path(sid, profile)
+    if p.is_file():
         p.unlink()
         return True
     return False
@@ -91,7 +140,24 @@ def remove_sample(sid: str, profile: str = DEFAULT) -> bool:
 
 def profiles() -> list[str]:
     h = home()
-    return sorted(p.name for p in h.iterdir() if p.is_dir()) if h.exists() else []
+    if not h.is_dir():
+        return []
+    out = []
+    for p in h.iterdir():
+        try:
+            if p.is_dir() and safe_name(p.name) == p.name and (p / 'samples').is_dir():
+                out.append(p.name)
+        except ValueError:
+            continue  # 우리가 만들지 않은 폴더는 건너뜀
+    return sorted(out)
+
+
+def signature(profile: str = DEFAULT) -> str:
+    """넣은 글이 바뀌었는지 알아보는 값(번호 · 종류 · 본문)."""
+    h = hashlib.sha1()
+    for sid, _, kind, body in samples(profile):
+        h.update(f'{sid}|{kind}|{fingerprint(body)}\n'.encode())
+    return h.hexdigest()[:16]
 
 
 def save_profile(data: dict, guides: dict[str, str], profile: str = DEFAULT) -> Path:
@@ -101,15 +167,23 @@ def save_profile(data: dict, guides: dict[str, str], profile: str = DEFAULT) -> 
         old.unlink()
     (d / 'profile.json').write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
     for kind, text in guides.items():
-        (d / (f'guide-{kind}.md' if kind else 'guide.md')).write_text(text, encoding='utf-8')
+        (d / (f'guide-{kind}.md' if kind else 'guide.md')).write_text(text, encoding='utf-8', newline='\n')
     return d / 'guide.md'
 
 
+def clear_profile(profile: str = DEFAULT) -> None:
+    """분석 결과 지우기 — 글이 3편 아래로 줄면 옛 안내서(뺀 글의 예문 포함)가 남지 않게."""
+    d = profile_dir(profile, create=False)
+    for p in [d / 'profile.json', d / 'guide.md', *d.glob('guide-*.md')]:
+        if p.is_file():
+            p.unlink()
+
+
 def load_profile(profile: str = DEFAULT) -> dict | None:
-    pj = profile_dir(profile) / 'profile.json'
-    return json.loads(pj.read_text(encoding='utf-8')) if pj.exists() else None
+    pj = profile_dir(profile, create=False) / 'profile.json'
+    return json.loads(pj.read_text(encoding='utf-8')) if pj.is_file() else None
 
 
 def load_guide(profile: str = DEFAULT, kind: str = '') -> str | None:
-    p = profile_dir(profile) / (f'guide-{kind}.md' if kind else 'guide.md')
-    return p.read_text(encoding='utf-8') if p.exists() else None
+    p = profile_dir(profile, create=False) / (f'guide-{kind}.md' if kind else 'guide.md')
+    return p.read_text(encoding='utf-8') if p.is_file() else None

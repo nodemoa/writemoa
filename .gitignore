@@ -4,3 +4,10 @@ __pycache__/
 .pytest_cache/
 dist/
 .DS_Store
+build/
+.env
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv*/
