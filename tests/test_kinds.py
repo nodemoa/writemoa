@@ -14,15 +14,24 @@ def test_examples_are_blog(examples):
         assert kinds.detect(body)[0].id == 'blog-info'
 
 
-def test_corpus_accuracy():
-    """새로 지어 쓴 64편 — 전체 맞힌 비율, 그리고 「확신」 이라고 한 것의 정확도."""
-    from kinds_corpus import C
-    res = [(want, *kinds.detect(t)) for want, _, t in C]
+def _rate(data):
+    res = [(want, *kinds.detect(t)) for want, _, t in data]
     ok = sum(1 for want, k, _, _ in res if k.id == want)
     sure = [(want, k) for want, k, _, s in res if s]
-    sure_ok = sum(1 for want, k in sure if k.id == want)
-    assert ok / len(res) >= 0.75, ok
-    assert sure_ok / max(1, len(sure)) >= 0.9, (sure_ok, len(sure))
+    return ok / len(res), sum(1 for want, k in sure if k.id == want) / max(1, len(sure)), len(sure) / len(res)
+
+
+def test_corpus_accuracy():
+    """새로 지어 쓴 두 묶음(64편 · 34편). 짐작은 틀릴 수 있으니 「확실」 이라고 정한 것의 정확도를 높게 지킨다(틀린 종류로 넣는 것보다 미정이 낫다)."""
+    from kinds_corpus import C
+    from kinds_corpus2 import N
+    for data in (C, N):
+        ok, sure_ok, sure_share = _rate(data)
+        assert ok >= 0.6, ok
+        assert sure_ok >= 0.85, sure_ok
+        assert sure_share >= 0.35, sure_share
+    ok, sure_ok, _ = _rate(C + N)
+    assert sure_ok >= 0.9, sure_ok
 
 
 def test_find():
@@ -48,3 +57,13 @@ def test_norm_issues():
 def test_phone_is_not_citation():
     assert kinds.signals('문의 (02-333-4567) 또는 (2024년 기준) 자료')['인용'] == 0
     assert kinds.signals('선행 연구(Kim, 2020)와 [3] 참고')['인용'] == 2
+
+
+def test_fixed_tone():
+    issues = kinds.norm_issues(kinds.BY_ID['notice'], '사무실 이전해요ㅎㅎ\n10월 28일부터 새 사무실이에요~\n김대리한테 편하게 물어보세요~\n문의는 02-123-4567')
+    assert any('합니다체' in m for m in issues) and any('웃음' in m for m in issues)
+    assert not any('말투' in m for m in kinds.norm_issues(kinds.BY_ID['notice'], NOTICE))
+
+
+def test_word_boundary():
+    assert kinds.signals('인공지능 기술을 소개합니다. 인공지능은 빠르게 발전합니다.')['공지 낱말'] == 0

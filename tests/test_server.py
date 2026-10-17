@@ -60,7 +60,8 @@ def test_set_kind_message(examples):
 
 def test_prompt_passes_style():
     p = S.write_in_my_style('프린터', 'blog-info', '', '회사용')
-    assert 'check_draft(kind="blog-info", style="회사용")' in p
+    assert 'check_draft(kind="blog-info", style="회사용"' in p
+    assert '「」' not in S.write_in_my_style('프린터')
 
 
 def test_stdio_round_trip(tmp_path):
@@ -81,3 +82,42 @@ def test_stdio_round_trip(tmp_path):
     assert {'add_my_writing', 'check_draft', 'read_my_writing', 'list_writing_kinds'} <= names and len(names) == 12
     assert res.is_error and '너무 짧습니다' in res.content[0].text
     assert '넣은 글이 없습니다' in ok.content[0].text
+
+
+def test_concurrent_adds_and_checks(examples):
+    import threading
+    add3(examples)
+    errs = []
+    texts = [f'동시에 넣는 글 {i}번입니다. ' + examples[0][1][:200] + f' 끝 {i}.' for i in range(8)]
+
+    def add(t):
+        try:
+            S.add_my_writing(t)
+        except Exception as e:
+            errs.append(e)
+
+    def check():
+        try:
+            S.check_draft(examples[1][1])
+        except Exception as e:
+            errs.append(e)
+    ts = [threading.Thread(target=add, args=(t,)) for t in texts] + [threading.Thread(target=check) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs, errs
+    prof = S._ensure('기본')
+    assert sum(prof['글 수'].values()) == 11
+
+
+def test_title_not_counted(examples):
+    add3(examples)
+    body = examples[0][1]
+    a = S.check_draft('# 아주, 긴, 제목, 쉼표, 가득\n' + body)
+    b = S.check_draft(body)
+    assert a.split('\n')[1] == b.split('\n')[1]
+
+
+def test_notice_tone_checked(examples):
+    add3(examples)
+    out = S.check_draft('사무실 이전해요ㅎㅎ\n10월 28일부터 새 사무실이에요~\n김대리한테 편하게 물어보세요~\n문의는 02-123-4567', kind='공지')
+    assert '합니다체' in out

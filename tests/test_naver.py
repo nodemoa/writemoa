@@ -37,3 +37,25 @@ def test_unclosed_html_is_fast(monkeypatch):
 def test_only_naver_hosts():
     with pytest.raises(ValueError):
         naver._get('https://example.com/x')
+
+
+def test_network_errors_are_korean(monkeypatch):
+    import urllib.error
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 404, 'nf', {}, None)
+    monkeypatch.setattr(naver._OPENER, 'open', boom)
+    with pytest.raises(ValueError, match='찾지 못했습니다'):
+        naver.recent_posts('nobodyhere', 3)
+
+    def offline(req, timeout=None):
+        raise urllib.error.URLError('down')
+    monkeypatch.setattr(naver._OPENER, 'open', offline)
+    with pytest.raises(ValueError, match='연결하지 못했습니다'):
+        naver.recent_posts('nobodyhere', 3)
+
+
+def test_redirect_outside_is_refused():
+    h = naver._OnlyNaver()
+    with pytest.raises(ValueError):
+        h.redirect_request(None, None, 302, 'Found', {}, 'http://127.0.0.1:9/secret')

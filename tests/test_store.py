@@ -87,3 +87,28 @@ def test_nfd_style_name():
 def test_double_cr():
     from naegeulmoa import analyze
     assert analyze.clean('가\r\r\n나\r\n다\r라') == '가\n나\n다\n라'
+
+
+def test_too_long_rejected():
+    with pytest.raises(ValueError, match='너무 깁니다'):
+        store.add_sample('가' * 200_001)
+
+
+def test_parallel_same_text_once():
+    errs = []
+
+    def one():
+        try:
+            store.add_sample(BODY)
+        except ValueError as e:
+            errs.append(e)
+    ts = [threading.Thread(target=one) for _ in range(6)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(store.samples()) == 1 and len(errs) == 5
+
+
+def test_broken_profile_is_ignored(home):
+    store.add_sample(BODY)
+    (home / '기본' / 'profile.json').write_text('{broken', encoding='utf-8')
+    assert store.load_profile() is None

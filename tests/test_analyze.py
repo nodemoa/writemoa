@@ -88,3 +88,40 @@ def test_modes():
     formal = A.measure(['오늘은 날씨가 좋습니다. 산책을 했습니다. 바람이 시원했습니다. 꽃도 피었습니다. 사진도 찍었습니다.'])
     assert any('말투' in t for t in A.compare(formal, mine, mode='family'))
     assert not any('말투' in t for t in A.compare(formal, mine, mode='loose'))
+
+
+def test_round2_endings_and_lines():
+    assert A.ending_of('그건 제가 할 수 있지요.') == '~죠'
+    assert A.ending_of('같이 갈래요?') == '~어요/아요'
+    for s in ['접수는 10월 31일까지', '결과는 아래 이미지', '자세한 건 공지 메시지', '대상: 회원 누구나', '오늘은 동창 모임.', '모든 게 처음.', '벌써 봄.']:
+        assert A.level_of(s) == '명사로 끝', s
+    assert A.level_of('어제 드디어 그 영화 봤음.') == '음슴체'
+    assert A.level_of('말씀은 잘 알겠습니다만') == '합니다체'
+    assert len(A.sentences('막상 써 보니,\n생각보다 훨씬 가볍고\n손에 착 감겨서\n하루 종일 들고 다녔어요.')) == 1
+    assert len(A.sentences('막상 먹어 보니까\n국물이 맑더라고요.')) == 1
+    assert len(A.sentences('어제 그 카페 갔어\n분위기 완전 좋아\n커피도 맛있어\n다음에 같이 가자')) == 4
+    assert A.sentences('네. 말씀하신 자료 보내 드립니다.')[0] == '네.'
+
+
+def test_round2_counts():
+    m = A.measure(['쫄깃쫄깃한 떡이 말랑말랑해요. 운영은 오전 10시 ~ 오후 4시, 월~금입니다. 머리가 똑똑해요.'])
+    assert '쫄깃쫄깃' in m['흉내말'] and '말랑말랑' in m['흉내말'] and '똑똑' not in m['흉내말']
+    assert m['횟수']['물결 ~'] == 0
+    human = '확인하는 것이 좋습니다. 무엇보다 한눈에 보기 좋아요. 주말엔 힐링했어요. 꼭 한 번 더 확인해 주세요.'
+    tips = A.compare(A.measure([human]), A.measure(['평범한 내 글입니다. 오늘은 날씨가 좋습니다. 산책을 했습니다.'] * 3))
+    assert not any('AI 투 말' in t or '과장' in t for t in tips), tips
+
+
+def test_digits_fast():
+    t0 = time.monotonic()
+    A.measure(['1' * 20000 + '원', '3' * 20000 + '~5'])
+    from naegeulmoa import kinds
+    kinds.signals('1' * 20000 + '월 3일까지')
+    kinds.norm_issues(kinds.BY_ID['blog-review'], '1' * 20000)
+    assert time.monotonic() - t0 < 3
+
+
+def test_contact_line_not_copied():
+    old = ['주차장 공사를 합니다. 지상 주차장을 이용해 주세요.\n문의: 관리사무소 031-777-1212', '정전 점검을 합니다. 엘리베이터가 멈춥니다.']
+    hits, _ = A.copied_spans('새 공지입니다. 물탱크를 청소합니다.\n문의: 관리사무소 031-777-1212', old)
+    assert not hits

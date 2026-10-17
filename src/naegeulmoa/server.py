@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import functools
 import re
-import time
 from pathlib import Path
 from typing import Annotated
 
@@ -18,7 +17,7 @@ from pydantic import Field
 
 from . import __version__, analyze, guide, kinds, naver, store
 
-PROFILE_VERSION = 3  # 분석 방식이 바뀌면 올린다 — 옛 분석은 자동으로 다시 만든다
+PROFILE_VERSION = 4  # 분석 방식이 바뀌면 올린다 — 옛 분석은 자동으로 다시 만든다
 
 INSTRUCTIONS = """내글모아: 사용자가 직접 쓴 글로 그 사람의 문체를 배워, 블로그나 글을 그 사람 문체로 쓰게 돕는 도구입니다.
 
@@ -43,18 +42,10 @@ Style = Annotated[str, Field(description='문체 묶음 이름. 보통은 비워
 KindArg = Annotated[str, Field(description='글 종류 아이디나 이름(list_writing_kinds). 예: blog-info, 후기, 공지, 이메일, 논문. 모르면 비워 두세요.')]
 WritingId = Annotated[int | str, Field(description='글 번호(list_my_writings 에 나오는 숫자, 예: 3 또는 0003)')]
 RO = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+ADDS = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 
 
-def _j(word: str, pair: str) -> str:
-    """조사 붙이기 — _j('기본', '을/를') → '기본을'. 받침에 따라 고른다(「」 로 감싼 말도)."""
-    core = re.sub(r'[」』)\]\s]+$', '', word)
-    ch = core[-1] if core else ''
-    o = ord(ch) - 0xAC00 if ch else -1
-    jong = o % 28 if 0 <= o < 11172 else (1 if ch.isdigit() and ch in '013678' else 0)
-    a, b = pair.split('/')
-    if pair == '으로/로':
-        return word + ('로' if jong in (0, 8) else '으로')
-    return word + (a if jong else b)
+_j = analyze.josa
 
 
 def tool(**kw):
@@ -75,15 +66,25 @@ def _kind(kind: str) -> kinds.Kind | None:
         return None
     k = kinds.find(kind)
     if not k:
-        raise ValueError(f'「{kind}」 라는 글 종류가 없습니다. 이 가운데서 골라 주세요:\n' + kinds.table())
+        raise ValueError(f'{_j("「" + kind + "」", "이라는/라는")} 글 종류가 없습니다. 이 가운데서 골라 주세요:\n' + kinds.table())
     return k
 
 
 def _where(p: Path) -> str:
     try:
-        return '~/' + str(p.relative_to(Path.home()))
+        return '~/' + p.relative_to(Path.home()).as_posix()
     except ValueError:
-        return str(p)
+        return p.as_posix()
+
+
+_GUESS: dict[str, str] = {}  # 종류 미정 글의 짐작(본문 지문 → 종류) — 글이 많을 때 다시 분석이 느려지지 않게
+
+
+def _guess(body: str) -> str:
+    fp = store.fingerprint(body)
+    if fp not in _GUESS:
+        _GUESS[fp] = kinds.detect(body)[0].id
+    return _GUESS[fp]
 
 
 def _analyze(style: str, items: list) -> dict:
@@ -99,31 +100,33 @@ def _analyze(style: str, items: list) -> dict:
             sub = [it for it in items if it[2] == kid]
             per[kid] = analyze.measure([b for _, _, _, b in sub])
             guides[kid] = guide.build(style, sub, per[kid], kind=k)
-    casual = [b for _, _, k, b in items if k in kinds.CASUAL or (not k and kinds.detect(b)[0].id in kinds.CASUAL)]
+    casual = [b for _, _, k, b in items if k in kinds.CASUAL or (not k and _guess(b) in kinds.CASUAL)]
     family = {'편한 글': analyze.measure(casual)} if len(casual) >= 2 else {}
-    prof = {'판': PROFILE_VERSION, '서명': store.signature(style), '전체': whole, '종류별': per, '갈래별': family, '글 수': counts}
+    prof = {'판': PROFILE_VERSION, '서명': store.signature(style, items), '전체': whole, '종류별': per, '갈래별': family, '글 수': counts}
     store.save_profile(prof, guides, style)
     return prof
 
 
 def _ensure(style: str) -> dict:
     """분석 결과 — 글이 바뀌었거나 옛 방식이면 다시 만든다. 3편이 안 되면 옛 결과를 지우고 안내한다."""
-    items = store.samples(style)
-    if len(items) < 3:
-        if store.profile_dir(style, create=False).is_dir():
-            store.clear_profile(style)
-        raise ValueError(f'「{style}」에 넣은 글이 {len(items)}편입니다. 3편 이상 넣어 주세요(add_my_writing · import_my_naver_blog).')
-    prof = store.load_profile(style)
-    if not prof or prof.get('판') != PROFILE_VERSION or prof.get('서명') != store.signature(style):
-        prof = _analyze(style, items)
-    return prof
+    with store.LOCK:
+        items = store.samples(style)
+        if len(items) < 3:
+            if store.profile_dir(style, create=False).is_dir():
+                store.clear_profile(style)
+            raise ValueError(f'「{style}」에 넣은 글이 {len(items)}편입니다. 3편 이상 넣어 주세요(add_my_writing · import_my_naver_blog).')
+        prof = store.load_profile(style)
+        if not prof or prof.get('판') != PROFILE_VERSION or prof.get('서명') != store.signature(style, items):
+            prof = _analyze(style, items)
+        return prof
 
 
 def _after_change(style: str) -> str:
     n = len(store.samples(style))
     if n < 3:
-        if store.profile_dir(style, create=False).is_dir():
-            store.clear_profile(style)
+        with store.LOCK:
+            if store.profile_dir(style, create=False).is_dir():
+                store.clear_profile(style)
         return f'지금 {n}편 — {3 - n}편 더 넣으면 분석합니다(많을수록 정확).'
     prof = _ensure(style)
     return f'지금 {n}편, 문체를 다시 분석했습니다(말투: {analyze.tone(prof["전체"]["말투 비율"])}).'
@@ -140,7 +143,7 @@ def list_writing_kinds() -> str:
             + '\n종류는 넣을 때 짐작하되 확실할 때만 정합니다. 사용자가 알려 주면 그것이 먼저입니다.')
 
 
-@tool()
+@tool(annotations=ADDS)
 def add_my_writing(text: Annotated[str, Field(description='사용자가 직접 쓴 글 본문(100자 이상). 남의 글은 넣지 않습니다.')],
                    title: Annotated[str, Field(description='글 제목(없으면 비움)')] = '',
                    kind: KindArg = '', style: Style = '기본') -> str:
@@ -150,12 +153,13 @@ def add_my_writing(text: Annotated[str, Field(description='사용자가 직접 �
         kid, how = k.id, '지정'
     else:
         g, why, sure = kinds.detect(text)
-        kid, how = (g.id, '짐작: ' + ', '.join(why[:2])) if sure else ('', f'확실하지 않아 미정 — 「{g.name}」 같음. 맞으면 set_writing_kind')
+        kid, how = (g.id, '짐작: ' + ', '.join(why[:2])) if sure else ('', f'확실하지 않음 — 「{g.name}」 같음. 맞으면 set_writing_kind')
     sid = store.add_sample(text, title, style, kid)
-    return f'글 {_j(sid, "을/를")} 넣었습니다 — 종류 「{_kind_name(kid)}」({how}). ' + _after_change(style)
+    kind_txt = f'종류 「{_kind_name(kid)}」' if kid else '종류 미정'
+    return f'글 {_j(sid, "을/를")} 넣었습니다 — {kind_txt}({how}). ' + _after_change(style)
 
 
-@tool()
+@tool(annotations=ADDS)
 def set_writing_kind(writing_id: WritingId,
                      kind: Annotated[str, Field(description='바꿀 종류(list_writing_kinds). 「미정」 이면 종류를 비움')], style: Style = '기본') -> str:
     """넣어 둔 글의 종류를 바꾼다."""
@@ -166,20 +170,24 @@ def set_writing_kind(writing_id: WritingId,
     return f'글 {store.safe_sid(writing_id)}의 종류를 {_j("「" + name + "」", "으로/로")} 바꿨습니다. ' + _after_change(style)
 
 
-@tool(annotations=ToolAnnotations(open_world_hint=True))
+@tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True))
 def import_my_naver_blog(blog: Annotated[str, Field(description='본인 네이버 블로그 주소(blog.naver.com/아이디)나 아이디')],
                          count: Annotated[int, Field(description='가져올 최근 글 수(1~30)', ge=1, le=30)] = 10,
                          style: Style = '기본') -> str:
     """본인 네이버 블로그의 최근 공개 글을 가져와 넣는다. 반드시 사용자 본인 블로그만 — 남의 블로그는 가져오지 않는다(본인 여부는 내글모아가 알 수 없음)."""
-    end = naver.deadline()
+    naver.start_deadline()
+    try:
+        return _import(blog, count, style)
+    finally:
+        naver.end_deadline()
+
+
+def _import(blog: str, count: int, style: str) -> str:
     posts = naver.recent_posts(blog, max(1, min(int(count), 30)))
     if not posts:
         raise ValueError('가져올 글을 찾지 못했습니다. 블로그 주소가 맞는지, 글이 전체 공개인지 확인해 주세요.')
     done, failed, dup = [], 0, 0
     for p in posts:
-        if time.monotonic() > end:
-            failed += 1
-            continue
         try:
             body = naver.post_text(p['blog'], p['no'])
             g, _, sure = kinds.detect(body)
@@ -218,7 +226,7 @@ def read_my_writing(writing_id: WritingId, style: Style = '기본') -> str:
     return f'글 {store.safe_sid(writing_id)} · {t or "(제목 없음)"} · {_kind_name(k)}\n\n{b}'
 
 
-@tool(annotations=ToolAnnotations(destructive_hint=True, idempotent_hint=True, open_world_hint=False))
+@tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False))
 def remove_my_writing(writing_id: WritingId, style: Style = '기본') -> str:
     """넣어 둔 글 한 편을 지운다(내 컴퓨터의 내글모아 폴더에서). 분석도 그 글을 빼고 다시 한다."""
     if not store.remove_sample(writing_id, style):
@@ -267,9 +275,15 @@ def get_my_style_guide(kind: KindArg = '', style: Style = '기본') -> str:
 
 
 @tool(annotations=ToolAnnotations(idempotent_hint=True, open_world_hint=False))
-def check_draft(text: Annotated[str, Field(description='점검할 초안 전문')], kind: KindArg = '', style: Style = '기본') -> str:
+def check_draft(text: Annotated[str, Field(description='점검할 초안 본문(제목은 title 에 따로)')], kind: KindArg = '',
+                style: Style = '기본', title: Annotated[str, Field(description='초안 제목(본문에서 빼고 보려고 따로 받음)')] = '') -> str:
     """쓴 초안을 내 글과 견주어 고칠 점(말투 · 길이 · 줄바꿈 · 문장부호 · AI 티 · 그 종류에 빠진 것 · 옛 글과 똑같은 문장)을 알려 준다."""
-    text = analyze.clean(text)
+    if len(text or '') > analyze.MAX_CHARS:
+        raise ValueError(f'초안이 너무 깁니다({len(text):,}자). {analyze.MAX_CHARS:,}자까지 점검합니다.')
+    text = analyze.clean(text).strip()
+    first, _, rest = text.partition('\n')
+    if first.startswith('# ') or (title and first.strip() == title.strip()):
+        text = rest.strip()  # 맨 윗줄 제목은 본문 수치에 넣지 않음
     if len(re.sub(r'\s', '', text)) < 30:
         raise ValueError('점검할 초안이 비었거나 너무 짧습니다(30자 이상).')
     prof = _ensure(style)
@@ -281,10 +295,10 @@ def check_draft(text: Annotated[str, Field(description='점검할 초안 전문'
             mode, mine, basis = 'same', prof['종류별'][k.id], f'내 「{k.name}」 글'
         elif k.id in kinds.CASUAL and fam:
             mode, mine = 'family', fam
-            basis = f'내 편한 글(블로그 · 후기 · SNS …) — 「{k.name}」 글이 2편이 안 되어 길이 · 줄바꿈은 빼고 말투 · 낱말 · 문장부호를 견줍니다'
+            basis = f'내 블로그 같은 글(블로그 · 후기 · SNS) — 「{k.name}」 글이 2편이 안 되어 글 길이 · 문장 길이는 빼고 말투 · 줄바꿈 · 낱말 · 문장부호를 비교합니다'
         else:
             mode, mine = 'loose', prof['전체']
-            basis = f'내 글 전체 — 「{k.name}」 글이 2편이 안 되어 내가 안 쓰는 버릇만 짚습니다(2편 넣으면 말투 · 길이까지 견줌)'
+            basis = f'내 글 전체 — 「{k.name}」 글이 2편이 안 되어 그 종류의 기본과 내가 안 쓰는 버릇만 짚습니다(2편 넣으면 말투 · 길이까지 비교)'
     else:
         mode, mine, basis, tips, free = 'same', prof['전체'], '내 글 전체', [], ()
         if len(prof['종류별']) >= 2:
@@ -319,12 +333,13 @@ def about_naegeulmoa() -> str:
 
 
 @mcp.prompt()
-def write_in_my_style(topic: str, kind: str = 'blog-info', facts: str = '', style: str = '기본') -> str:
-    """내 문체로 글 쓰기 — 주제 · 글 종류 · 사실을 주면 안내서를 읽고 쓰고 점검까지."""
-    return (f'다음 주제로 내 문체(「{style}」)에 맞춰 「{kind}」 글을 써 주세요.\n주제: {topic}\n'
+def write_in_my_style(topic: str, kind: str = '', facts: str = '', style: str = '기본') -> str:
+    """내 문체로 글 쓰기 — 주제 · 사실(· 글 종류)을 주면 안내서를 읽고 쓰고 점검까지. 종류는 공지 · 이메일처럼 정해진 글일 때만."""
+    what = f'「{kind}」 글' if kind else '글'
+    return (f'다음 주제로 내 문체(「{style}」)에 맞춰 {what}을 써 주세요.\n주제: {topic}\n'
             f'사실(이것만 쓰고 지어내지 말 것):\n{facts or "(없음 — 필요하면 물어볼 것)"}\n\n'
             f'순서: get_my_style_guide(kind="{kind}", style="{style}") 를 먼저 읽고 → 쓰고 → '
-            f'check_draft(kind="{kind}", style="{style}") 로 점검해 고칠 점을 고친 뒤 → 최종 글만 보여 주세요.')
+            f'check_draft(kind="{kind}", style="{style}", title=제목) 으로 점검해 고칠 점을 고친 뒤(한두 번) → 최종 글만 보여 주세요.')
 
 
 def main() -> None:

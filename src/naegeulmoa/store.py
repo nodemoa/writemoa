@@ -13,12 +13,15 @@ import hashlib
 import json
 import os
 import re
+import tempfile
+import threading
 import unicodedata
 from pathlib import Path
 
 from . import analyze
 
 DEFAULT = '기본'
+LOCK = threading.RLock()  # 같은 프로그램 안에서 글 넣기 · 분석이 겹치지 않게(도구는 여러 줄로 동시에 돌 수 있음)
 _SID = re.compile(r'\d{1,6}')
 _FILE = re.compile(r'\d{4,6}\.txt')
 _RESERVED = {'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10)), *(f'lpt{i}' for i in range(1, 10))}
@@ -66,23 +69,26 @@ def fingerprint(text: str) -> str:
 
 
 def add_sample(text: str, title: str = '', profile: str = DEFAULT, kind: str = '') -> str:
+    if len(text or '') > analyze.MAX_CHARS:
+        raise ValueError(f'글이 너무 깁니다({len(text):,}자). {analyze.MAX_CHARS:,}자까지 받으니 나눠서 넣어 주세요.')
     text = analyze.clean(text).strip()
     if len(re.sub(r'\s', '', text)) < 100:
         raise ValueError('글이 너무 짧습니다. 100자 이상인 글을 넣어 주세요(문체를 읽으려면 문장이 여러 개 있어야 합니다).')
     d = profile_dir(profile) / 'samples'
     fp = fingerprint(text)
-    for sid, _, _, body in samples(profile):
-        if fingerprint(body) == fp:
-            raise ValueError(f'같은 글이 이미 있습니다(글 {sid}).')
-    nums = [int(p.stem) for p in d.iterdir() if _FILE.fullmatch(p.name)]
-    n = (max(nums) + 1) if nums else 1
-    for _ in range(1000):  # 두 요청이 같은 번호를 잡아도 덮어쓰지 않게 — 새 파일로만 연다
-        sid = f'{n:04d}'
-        try:
-            _write(d / f'{sid}.txt', title, kind, text, mode='x')
-            return sid
-        except FileExistsError:
-            n += 1
+    with LOCK:
+        for sid, _, _, body in samples(profile):
+            if fingerprint(body) == fp:
+                raise ValueError(f'같은 글이 이미 있습니다(글 {sid}).')
+        nums = [int(p.stem) for p in d.iterdir() if _FILE.fullmatch(p.name)]
+        n = (max(nums) + 1) if nums else 1
+        for _ in range(1000):  # 다른 프로그램이 같은 번호를 잡아도 덮어쓰지 않게 — 새 파일로만 연다
+            sid = f'{n:04d}'
+            try:
+                _write(d / f'{sid}.txt', title, kind, text, mode='x')
+                return sid
+            except FileExistsError:
+                n += 1
     raise ValueError('글 번호를 잡지 못했습니다. 다시 시도해 주세요.')
 
 
@@ -152,22 +158,36 @@ def profiles() -> list[str]:
     return sorted(out)
 
 
-def signature(profile: str = DEFAULT) -> str:
-    """넣은 글이 바뀌었는지 알아보는 값(번호 · 종류 · 본문)."""
+def signature(profile: str = DEFAULT, items: list | None = None) -> str:
+    """넣은 글이 바뀌었는지 알아보는 값(번호 · 종류 · 본문). items 를 주면 그 목록으로 — 분석에 쓴 글과 서명이 어긋나지 않게."""
     h = hashlib.sha1()
-    for sid, _, kind, body in samples(profile):
+    for sid, _, kind, body in (samples(profile) if items is None else items):
         h.update(f'{sid}|{kind}|{fingerprint(body)}\n'.encode())
     return h.hexdigest()[:16]
+
+
+def _atomic(path: Path, text: str) -> None:
+    """임시 파일에 다 쓴 뒤 바꿔 끼운다 — 쓰다 끊겨도 반쯤 쓴 파일이 남지 않게."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.tmp-', suffix=path.suffix)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def save_profile(data: dict, guides: dict[str, str], profile: str = DEFAULT) -> Path:
     """guides: {'': 전체 안내서, '<종류>': 종류별 안내서}."""
     d = profile_dir(profile)
+    keep = {f'guide-{k}.md' for k in guides if k}
     for old in d.glob('guide-*.md'):
-        old.unlink()
-    (d / 'profile.json').write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
+        if old.name not in keep:
+            old.unlink(missing_ok=True)
     for kind, text in guides.items():
-        (d / (f'guide-{kind}.md' if kind else 'guide.md')).write_text(text, encoding='utf-8', newline='\n')
+        _atomic(d / (f'guide-{kind}.md' if kind else 'guide.md'), text)
+    _atomic(d / 'profile.json', json.dumps(data, ensure_ascii=False, indent=1))
     return d / 'guide.md'
 
 
@@ -175,15 +195,21 @@ def clear_profile(profile: str = DEFAULT) -> None:
     """분석 결과 지우기 — 글이 3편 아래로 줄면 옛 안내서(뺀 글의 예문 포함)가 남지 않게."""
     d = profile_dir(profile, create=False)
     for p in [d / 'profile.json', d / 'guide.md', *d.glob('guide-*.md')]:
-        if p.is_file():
-            p.unlink()
+        p.unlink(missing_ok=True)
 
 
 def load_profile(profile: str = DEFAULT) -> dict | None:
     pj = profile_dir(profile, create=False) / 'profile.json'
-    return json.loads(pj.read_text(encoding='utf-8')) if pj.is_file() else None
+    try:
+        data = json.loads(pj.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None  # 없거나 깨졌으면 다시 분석하게
+    return data if isinstance(data, dict) else None
 
 
 def load_guide(profile: str = DEFAULT, kind: str = '') -> str | None:
     p = profile_dir(profile, create=False) / (f'guide-{kind}.md' if kind else 'guide.md')
-    return p.read_text(encoding='utf-8') if p.is_file() else None
+    try:
+        return p.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None

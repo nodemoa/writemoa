@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import html
 import re
+import socket
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -16,23 +18,62 @@ UA = f'naegeulmoa/{__version__} (+https://nodemoa.com)'
 MAX_BYTES = 3_000_000   # 한 번 받는 응답 상한
 TIMEOUT = 15            # 요청 하나의 제한 시간(초)
 TOTAL_SECONDS = 120     # 가져오기 전체 제한 시간(초)
-_HOSTS = {'blog.naver.com', 'm.blog.naver.com', 'rss.blog.naver.com'}
+_HOSTS = {'blog.naver.com', 'm.blog.naver.com', 'rss.blog.naver.com'}  # naver.me 는 짧은 주소 풀 때만
 _ID = re.compile(r'[A-Za-z0-9_\-]{3,40}')
 _NOT_ID = {'postview', 'postlist', 'prologue', 'blogid', 'naver', 'postview.naver', 'postlist.naver', 'prologue.naver'}
 
 
-def _get(url: str) -> str:
+class _OnlyNaver(urllib.request.HTTPRedirectHandler):
+    """넘겨 주는 주소를 따라가기 전에 본다 — 네이버 밖으로는 요청 자체를 보내지 않는다."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if (urllib.parse.urlsplit(newurl).hostname or '') not in _HOSTS:
+            raise ValueError('네이버 밖 주소로 넘어가려 해서 멈췄습니다.')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_OnlyNaver)
+_END: list[float] = [0.0]  # 가져오기 전체 마감(time.monotonic). 0 이면 없음
+
+
+def _get(url: str, hosts: set[str] = _HOSTS) -> str:
     host = urllib.parse.urlsplit(url).hostname or ''
-    if host not in _HOSTS:
+    if host not in hosts:
         raise ValueError('네이버 블로그 주소만 가져올 수 있습니다.')
+    timeout = TIMEOUT
+    if _END[0]:
+        left = _END[0] - time.monotonic()
+        if left <= 1:
+            raise ValueError('가져오는 시간이 너무 길어져 멈췄습니다. 글 수를 줄여 다시 해 주세요.')
+        timeout = min(TIMEOUT, left)
     req = urllib.request.Request(url, headers={'User-Agent': UA})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        if (urllib.parse.urlsplit(r.geturl() or url).hostname or '') not in _HOSTS:
-            raise ValueError('네이버 밖 주소로 넘어가서 멈췄습니다.')
-        data = r.read(MAX_BYTES + 1)
+    try:
+        with _OPENER.open(req, timeout=timeout) as r:
+            data = r.read(MAX_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError('그 블로그(또는 글)를 찾지 못했습니다. 주소 · 아이디가 맞는지, 글이 전체 공개인지 확인해 주세요.') from None
+        raise ValueError(f'네이버가 요청을 받지 않았습니다(HTTP {e.code}). 잠시 뒤 다시 해 주세요.') from None
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError):
+        raise ValueError('네이버에 연결하지 못했습니다. 인터넷 연결을 확인하고 잠시 뒤 다시 해 주세요.') from None
     if len(data) > MAX_BYTES:
         raise ValueError('응답이 너무 커서 멈췄습니다.')
     return data.decode('utf-8', errors='replace')
+
+
+def _short_link(s: str) -> str:
+    """naver.me 짧은 주소 → 실제 블로그 주소(네이버 안에서 넘겨 주는 곳만 따라감)."""
+    u = urllib.parse.urlsplit(s if '://' in s else 'https://' + s)
+    if u.hostname != 'naver.me':
+        return s
+    req = urllib.request.Request(urllib.parse.urlunsplit(('https', 'naver.me', u.path, '', '')), headers={'User-Agent': UA}, method='HEAD')
+    try:
+        with _OPENER.open(req, timeout=TIMEOUT) as r:
+            return r.geturl()
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError('짧은 주소(naver.me)를 열지 못했습니다. blog.naver.com/아이디 꼴로 넣어 주세요.') from None
 
 
 def blog_id_of(url_or_id: str) -> str:
@@ -40,6 +81,8 @@ def blog_id_of(url_or_id: str) -> str:
     s = (url_or_id or '').strip()
     if _ID.fullmatch(s) and s.lower() not in _NOT_ID:
         return s
+    if 'naver.me' in s:
+        s = _short_link(s)
     u = urllib.parse.urlsplit(s if '://' in s else 'https://' + s)
     if (u.hostname or '') not in _HOSTS:
         raise ValueError('네이버 블로그 주소(blog.naver.com/아이디)나 아이디를 넣어 주세요.')
@@ -104,5 +147,9 @@ def post_text(blog: str, no: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', text)
 
 
-def deadline() -> float:
-    return time.monotonic() + TOTAL_SECONDS
+def start_deadline() -> None:
+    _END[0] = time.monotonic() + TOTAL_SECONDS
+
+
+def end_deadline() -> None:
+    _END[0] = 0.0
